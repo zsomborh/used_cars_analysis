@@ -1,0 +1,271 @@
+---
+title: "Analysis on used cars - vol 2"
+author: "Zsombor Hegedus"
+date: '2020 december 18'
+output:
+  pdf_document:
+    #toc: false
+    highlight: zenburn
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Executive summary ##
+
+This document is to uncover a pattern of association between the age and price of used Renault Megane cars. The following paper have two main parts, where the first one introduces important features of the data and focuses on simple linear regression analysis, whereas the second part will focus on non-linear patterns in the data. My final model choice is to use a log-level model, which not only has a very good fit, but also provides a clear interpretation. At the end, I will also showcase a few used cars that are proposed to be underpriced and can be considered a good deal. Of course, the truth is not always that simple, and there are many factors to consider when buying a car, other than its age. 
+
+This analysis is the continuation of an earlier project of mine, which is aviailable in this [github repo]('https://github.com/zsomborh/ba_da1/tree/master/homework'). The analysis was done as homework for chapter 7 exercise 4 and chapter 8 exercise 5 - files for the current analysis are stored in this [github repo]('https://github.com/zsomborh/ba_da2/tree/main/homework/used_cars')
+
+```{r preprocess, include = FALSE}
+
+library(data.table)
+library(tidyverse)
+library(moments)
+library(xtable)
+library(ggpubr)
+library(estimatr)
+library(texreg)
+library(lubridate)
+
+data_in <- "C:/Users/T450s/Desktop/programming/git/ba_da2/homework/used_cars"
+
+df <- read_csv(paste0(data_in,'/data-clean/used_cars_clean.csv'))
+
+df$Age <- year(today())-df$Year
+
+df <- df %>%
+    mutate(
+        Prices = Prices / 1000000,
+        Age_sq = Age **2,
+        Age_cb = Age **3, 
+        Prices_ln = log(Prices)
+    )
+
+age_df <- df %>% summarise(
+    variable = 'Age',
+    mean     = round(mean(Age),2),
+    median   = median(Age),
+    std      = round(sd(Age),2),
+    iq_range = IQR(Age), 
+    min      = min(Age),
+    max      = max(Age),
+    skew     = round(skewness(Age),2),
+    numObs   = sum( !is.na( Age ) ) )
+
+price_df <- df %>% summarise(
+    variable = 'Price in HUF(mm)',
+    mean     = round(mean(Prices),2),
+    median   = median(Prices),
+    std      = round(sd(Prices),2),
+    iq_range = IQR(Prices, na.rm= TRUE), 
+    min      = min(Prices),
+    max      = max(Prices),
+    skew     = round(skewness(Prices),2),
+    numObs   = sum( !is.na( Prices ) ) )
+
+df_summary <- age_df %>% add_row( price_df ) 
+xtb <- xtable(df_summary,type = "latex", caption = "Summary statistics of examined variables")
+
+```
+
+
+## Summary statistics 
+
+I will make an attempt to uncover a pattern of association between the price and the age of given Renault Megane model (Price is expressed in million HUF throught the document). A trivial expectation is that older cars cost less than newer ones, but let's see if this can be proven by regression analysis. First, let's look at the most important statistics of the two variables, the *Age* and the *Prices* which are summarised in Table 1. 
+
+```{r table1, echo = FALSE , results = "asis", warning = FALSE, message = FALSE }
+print(xtb,comment=FALSE, include.rownames=FALSE)
+
+
+```
+
+We have a little bit more than a 1000 observations in our data. Age variable shows that we already have cars made in the current year (2020) that are already being sold, and we can also see at least one 24 years old car which probably doesn't worth much now. The the standard deviation of the prices is quite high, and from the mean and median we can also suspect that the distribution of the variable resembles lognormal. 
+
+## Simple linear regression without transformation
+
+I will use a linear regression for analysing the pattern of association, but before that I will show two bin scatter plots so that we can have a sense of the relationship. First I used two bins that indicate a decreasing trend between our variables - this is in line with the expectations; older cars have lower price in the data. A bin scatter with 4 bins also enforces this message, the trend is more visible and perhaps it is even non-linear. 
+
+```{r binscatter, fig.width=10, echo=FALSE, warning = FALSE}
+
+p1<- ggplot(df, aes(x = Age, y= Prices))+ 
+    stat_summary_bin(fun='mean', bins =2, color = 'orange', size = 7, geom = 'point')+ ylab('Price')+
+    theme_bw() +
+    scale_y_continuous(#labels = comma, 
+                       limits = c(0.04,14))+
+    xlim(0,max(df$Age))
+
+p2<- ggplot(df, aes(x = Age, y= Prices))+ 
+    stat_summary_bin(fun='mean', bins =4, color = 'orange', size = 7, geom = 'point')+ ylab('Price')+
+    theme_bw() +
+    scale_y_continuous(#labels = comma,
+                       limits = c(0.04,14))+
+    xlim(0,max(df$Age))
+
+ggarrange(p1,p2,nrow=1)
+
+```
+
+But perhaps bin scatter is not the best to uncover patterns. When I grouped together x variables, a lot of information was lost which might be very valuable. I can see some pattern from the bins as well, but there is a chance that I am missing out on e.g.: a few spikes in the data. I also want to generalise my findings and have a quantifoable impact of this association. To overcome this issue I ran the following linear regression.
+
+$$ y^E=\alpha + \beta x $$ 
+
+The below figure illustrates how such a linear regression line fits on the scatter plot between the two variables. 
+
+```{r regplot, fig.width=10, echo=FALSE, warning = FALSE, message = FALSE}
+ggplot(df, aes(x = Age, y= Prices)) + geom_point() + geom_smooth(method = lm, color = 'red')+ ylab('Price')+theme_bw()
+
+```
+
+We can see that it is pretty good at capturing the decreasing pattern between price and age. Estimated coefficients can be seen in Table 2. I will also do hypothesis testing and examine if they are significant at 5% - since I don't really want to see if this pattern exists without reasonable doubt, 5% looks like a good enough choice for this research question.
+
+```{r, echo = FALSE , results = "asis", warning = FALSE, message = FALSE }
+
+#run chosen regression model - which is a linear regression
+reg1 <- lm_robust( Prices ~ Age , data = df , se_type = "HC2" )
+
+df$reg1_y_pred <- reg1$fitted.values
+# Calculate the errors of the model
+df$reg1_res <- df$Prices - df$reg1_y_pred 
+
+tab<- tidy(reg1)
+
+tab <-  tab %>%  
+    transmute(
+        variable=term,
+        estimate = estimate,
+        std.error = std.error,
+        statistic = statistic,
+        p.value = p.value,
+        conf.low = conf.low,
+        conf.high = conf.high)
+
+#htmlTable::htmlTable(tab)
+xtb <- xtable(tab,type = "latex", caption = "Hypothesis testing for the slope of the regression")
+print(xtb,comment = FALSE, include.rownames = FALSE)
+```
+
+The intercept is at 4.24mm HUF, this is the expected price of a car with age = 0, which means that for cars that were made in 2020. The estimated slope coefficient is -221.3k HUF which means that we expect our price to be 221.3k HUF lower for a car that is one year older in our data. My pre-set confidence was 5%, and appereantly both of the estimated coefficient are significant at that level. P-values suggest that I could have chosen an even lower significance level, but nevertheless, I will reject the $H_{0}$, and say that none of the estimated coefficients are zero.
+
+It is worth taking a look at the residuals. If we were to choose the best deals based on the linear model, Table 3 shows what we would get: 
+```{r linreg_table, include = FALSE}
+
+# Find countries with largest negative errors
+top_df <- df %>% top_n( -10 , reg1_res ) %>% 
+    select(ID, Age,Prices, Km, Power_kW, reg1_y_pred,reg1_res) %>% 
+    transmute(
+        ID= as.character(ID),
+        Age = round(Age,0),
+        Prices = round(Prices,0),
+        Km = round(Km,0),
+        Power_kW = round(Power_kW,0),
+        Pred = round(reg1_y_pred,0),
+        Residuals = round(reg1_res,0)
+    )
+
+xtb <- xtable(top_df,type = "latex", 
+              caption = "10 Best Renault Megane deals proposed by simple linear OLS based on Age-Price relationship", 
+              digits = c(0,0,0,0,0,0,0,0))
+```
+
+```{r table2, echo = FALSE , results = "asis", warning = FALSE, message = FALSE }
+print(xtb, comment=FALSE, include.rownames=FALSE)
+```
+We could have seen from the figure with the regression line that the majority of the $\hat{y}$s with high negative residuals are between 5 and 13 years. Even though it is worth taking a look at the above ten cars, one should keep in mind that there are multiple other factors to consider when buying a car such as the Kms it run, or whether there are any extras included (like sensors for parking).
+
+But when looking at the scatter plot I can see some non-linearity, so it is worth to continue the analysis with transformations that can help capturing this pattern.
+
+## Modeling non-linearity
+
+As a first step, I wanted to see if I can visually prove that there is a non-linear patter. One of the best ways to do that is by employing a non-parametric regression model, called lowess. Lowess will dynamically calculate the average $y$s in a symmetrical interval around different x values. The figure below shows the lowess function on the scatter plot with blue color. 
+
+```{r lowess, fig.width=10, fig.height=6, echo = FALSE , results = "asis", warning = FALSE, message = FALSE}
+ggplot(df, aes(x = Age, y= Prices)) + geom_point() + geom_smooth(method="loess", color = 'navyblue') +theme_bw()
+```
+
+The smooth line in the data is exactly what I wanted to see, there is clear non-linear pattern in our data that the lowess captured pretty well. Looks like the decreasing trend is not as steep as the first model implies, and another very interesting behaviour is around cars that are 1 years old. They are completely outside the pattern and can be considered to be extreme values - it is advisable to look into them a little bit more. 
+
+They are all *RENAULT MEGANE 1.8 TCe R.S RS* models which is a high end luxury version of the Renault Megane with a displacement of ca.1800 cm^3^, which explains why they don't fit into our pattern that much. I decided to  keep these variables as they are not a result of error and still in the population that I want to examine, which is Renault Megane used cars.
+
+My next goal is to introduce a linear regression model that can capture this non-linearty. I thought of two approaches that can be of help for this exercise: polynomials and log transformations. Given the lognormal looking distribution of the *Price* variable (which is also a ratio variable), I decided to get the natural log of *Price*, and for the polynomial case I will try to see how well the quadratic and cubic form fares. I experimented visually with a few model choices, which is visible in the below figure:
+
+```{r regplot2, fig.width=10, fig.height=10, echo = FALSE , results = "asis", warning = FALSE, message = FALSE}
+p1<- ggplot(df, aes(x = Age, y= Prices_ln)) + geom_point() + ylab('Price')+
+    geom_smooth(method="loess") +theme_bw()
+p2<- ggplot(df, aes(x = Age, y= Prices_ln)) + geom_point() + ylab('Log price') +
+    geom_smooth(method = lm, color = 'red') +theme_bw()
+p3<- ggplot(df, aes(x = Age, y= Prices_ln)) + geom_point() + ylab('Log price') + xlab('Age quadratic') +
+    geom_smooth( formula = y ~ poly(x,2) , method = lm , color = 'orange') +theme_bw()
+p4<- ggplot(df, aes(x = Age, y= Prices)) + geom_point() +ylab('Price')+ xlab('Age quadratic') +
+    geom_smooth( formula = y ~ poly(x,2) , method = lm , color = 'lightgreen') +theme_bw()
+p5<- ggplot(df, aes(x = Age, y= Prices_ln)) + geom_point() + ylab('Log price') + xlab('Age cubic') +
+    geom_smooth( formula = y ~ poly(x,3) , method = lm , color = 'gold') +theme_bw()
+p6<- ggplot(df, aes(x = Age, y= Prices)) + geom_point() +  ylab(' Price') + xlab('Age cubic') +
+    geom_smooth( formula = y ~ poly(x,3) , method = lm , color = 'gray') +theme_bw()
+ggarrange(p1,p2,p3,p4,p5,p6,nrow=2, ncol = 3)
+```
+
+Based on the above I narrowed down the potential model choices to 3, which were the following : 
+
+- Quadratic regression
+- Cubic regression
+- Log-level regression
+
+I also kept the first linear regression model so that we can see the improvement compared to that as a baseline. The regression model summaries are collected in the below table.
+
+``` {r model_com, echo = FALSE}
+reg2 <- lm_robust( Prices ~ Age + Age_sq , data = df , se_type = "HC2" )
+reg3 <- lm_robust( Prices ~ Age + Age_sq + Age_cb , data = df , se_type = "HC2" )
+reg4 <- lm_robust( Prices_ln ~ Age , data = df , se_type = "HC2" )
+
+data_out <- '../out/'
+out1<- htmlreg( list(reg1 , reg2 , reg3 , reg4),
+         type = 'html',
+         custom.model.names = c("Price~Age","Price~Age - quadratic",
+                                "Price~Age - cubic","Log Price~Age"),
+         caption = "Modeling pattern of association between a car's price and age")
+
+
+#out2 <-  gsub("108", format(1011288, big.mark = "' "), out1)
+```
+
+```{r, results = 'asis', echo = FALSE}
+texreg(list(reg1 , reg2 , reg3 , reg4), table = FALSE, use.packages = FALSE, float.pos = "h",
+       custom.model.names = c("Price~Age",
+                              "Price~Age - quadratic",
+                              "Price~Age - cubic",
+                              "Log Price~Age"))
+
+
+```
+
+We can see a pretty substantial imrpovement in the R^2^ for each new model, that captures non-linearity. We are now capable of explaining 80%-85% of the variation of $y$ with the new models, compared to 66% of the level-level OLS. The $\beta_2$ coefficient in the quadratic form shows that the parabola used for this regression is convex. Even though the cubic case improves our model fit sligthly, itt brings extra complexity to the model, which we don't really need when uncovering patterns of association. On the other hand the log-level model provides a great fit, we could also see how well it fits on the scatterplot, and it has a clear interpretation as well. All in all the log-level model is going to be my model choice, which can be described in the below functional form: 
+
+
+$$ ln(y)^E=\alpha + \beta x $$ 
+
+The intercept can't really be interpreted as such, since our $y$ variable is log transformed. The estimated slope coefficient is -0.15 which means that we expect our price to be 15% lower for a one year older car. My pre-set confidence was again set at 5%, and appereantly my slope coefficient is significant at that level. P-values suggest that it is highly significant so, I will reject the $H_{0}$, and my 95% CI will state that I can be 95% confident that the expected percentage decrease by a year older model is between 14% and 15%.
+
+To get the best deals, we will look at the residuals another time in Table 4.
+
+```{r table3, echo = FALSE , results = "asis", warning = FALSE, message = FALSE }
+
+
+df$reg4_y_pred <- reg4$fitted.values
+# Calculate the errors of the model
+df$reg4_res <- df$Prices - df$reg4_y_pred 
+
+top_df <- df %>% top_n( -10 , reg4_res ) %>% select(ID, Age,Prices, Km, Power_kW, reg4_y_pred,reg4_res)
+colnames(top_df)[6:7] <- c('Pred', 'Residual') 
+xtb <- xtable(top_df,type = "latex", 
+              caption = "Best Renault Megane deals proposed by linear OLS based on Log price - Age relationship", 
+              digits = c(0,0,0,0,0,0,0,0))
+print(xtb, comment=FALSE, include.rownames=FALSE )
+```
+
+Looks like the winner here is the same as in the level-level case, so now two models suggest that we should look at that Renault used car with careful eyes. All in all, other than the first car, there is lot of common elements between the two tables, so even though we captured the non-linear pattern, the overall picture doesn't seem to be very much different between the two cases.
+
+## Summary
+
+I set out to analyse the used car market of Renault Megane models to uncover a pattern of association between the age of a car and their prices. I used linear regression models for my analysis and experimented with log transformation and polynomials, since the pattern between my models seemed non-linear. Out of 4 models (quadratic, cubic, level-level, log-level) my final model choice was a log-level regression, which not only fitted the scatter plot of the variables most, but also produced a spectecular 85% R^2^. When looking at residuals the level-level and log-level regression produced similar results, the model implies that there are some underpriced cars in the segment of 5-13 years. But I also noticed that some cars in the model don't fit into the big picture, as they are in a quasi luxurious category, so I can see further improvments down the line that can be done to the model, such as including multiple regressors (e.g. displacement) to further improve interpretation of residual analysis.
