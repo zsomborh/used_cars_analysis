@@ -1,0 +1,291 @@
+---
+title: "Analysis on used cars - vol 2"
+author: "Zsombor Hegedus"
+date: '2021 february 4 '
+output:
+  pdf_document:
+    #toc: false
+    highlight: zenburn
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Executive summary ##
+This document is to build multiple linear regression models with increasing complexity and predict the prices of used cars. This analysis is a continuation of an earlier project of mine in which I uncovered a pattern of association between the age and a price of Renault Megane models. In this paper I will take this analysis to another level and try to enhance my apprach.
+
+The analysis is submitted as data exercise from Chapter 13 exercise 3. Workfiles are available in my [github repo]('https://github.com/zsomborh/used_cars_analysis').  
+
+```{r preprocess, include = FALSE}
+rm(list = ls())
+
+library(data.table)
+library(tidyverse)
+library(moments)
+library(estimatr)
+library(lubridate)
+library(caret)
+library(rattle)
+library(Hmisc)
+require(scales)
+library(ggpubr)
+
+df<- read_csv('https://raw.githubusercontent.com/zsomborh/used_cars_analysis/main/data/clean/used_cars_clean.csv')
+
+# prepping variables
+df<- df %>% 
+    mutate(
+        Engine = factor(ifelse(Engine %in% c('Benzin/Gáz', 'Benzin'),'Petrol',Engine))) %>% 
+    filter(
+        !Engine == 'LPG')
+
+df <- df %>%  mutate( 
+    Age = as.numeric(year(today())-Year), 
+    Month = NULL,
+    Year = NULL)
+
+df[df$Km == max(df$Km),'Km'] <- mean(df$Km)
+
+df <- df %>% mutate(
+    ln_Prices = log(Prices)
+)
+
+# feature engineering
+df<- df %>% mutate(
+    sq_Displacement = Displacement ** 2, 
+    sq_Horsepower = Horsepower ** 2, 
+    sq_Km = Km **2, 
+    sq_PictureCount = PictureCount **2, 
+    sq_Age = Age **2,
+    cb_Displacement = Displacement ** 2, 
+    cb_Horsepower = Horsepower ** 2, 
+    cb_Km = Km **2, 
+    cb_PictureCount = PictureCount **2, 
+    cb_Age = Age **2
+    
+)
+
+df <- df %>% mutate(
+    is_luxury = ifelse(Engine == 'Petrol' & Prices >7000000 | Engine == 'Diesel' & Prices > 5000000,1,0)
+    )
+
+sum(df$is_luxury)/nrow(df)
+
+# define variable sets for incrementally more complex models
+
+sq_vars <- df %>% select(starts_with('sq')) %>% colnames()
+cb_vars <- df %>% select(starts_with('cb')) %>% colnames()
+
+target_var1 <- c('Prices')
+target_var2 <- c('ln_Prices')
+
+first_case <- c('Age')
+second_case <- c('Age', 'Displacement', 'Km')
+third_case <- c(second_case, 'Horsepower','PictureCount', 'is_luxury')
+
+
+# Added interaction sets 
+interactions1 <- c(paste0('Engine * (',paste(third_case, collapse = '+'),')'))
+interactions2 <- c(paste0('Age * (',paste(third_case[2:length(third_case)], collapse = '+'),')'))
+interactions3 <- c(paste0('is_luxury * (',paste(third_case, collapse = '+'),')'))
+
+
+fourth_case <- c(third_case, sq_vars)
+fifth_case <- c(fourth_case,interactions1)
+sixth_case <- c(fifth_case,cb_vars)
+seventh_case <- c(sixth_case,interactions2, interactions3)
+```
+
+## Feature engineering 
+
+My task is to build more and more complex models and to see if by doing so, I can improve their predictive power. Since I will use OLS only, the increasing complexity will be achieved with my selection of predictors and their functional form. In my earlier exercise, I discovered that a log-level model using the age of a car as the only rght hand side variable - performed the best. Learning from that, I will use ln transformation for my target variable, which is the price of a used car. Another lesson from that exercise was that I noticed a set of observations which formed a sort of cluster, and had prices that did not fit into the general pattern at all - I labelled them as potentially luxurious models, and created a dummy variables for them for this exercise. 
+
+Since I scraped quite a few information on used cars, I will use multiple regression models where I include not only age, but other variables such as: `Displacement`, `Horsepower`, `Km`, `PictureCount`. The first two speak for themsleves, the third one, `Km` is the number of kilometers the car ran, and `PictureCount` is the number of photos someone uploaded in the advertisement. Other than these variables I also included interaction terms and second and third order polynomials for the more complex cases. So overall, my models correspond to the below variable sets:
+
+- 1st OLS: `Age` 
+- 2nd OLS: 1st OLS + `Displacement` + `Km`
+- 3rd OLS: 2nd OLS + `Horsepower` + `PictureCount` + `luxury_dummy `
+- 4th OLS: 3rd OLS + second order polynomials of continuous variables
+- 5th OLS: 4th OLS + all interactions between `Engine` and continuous variables
+- 6th OLS: 5th OLS + third order polynomials of continuous variables
+- 7th OLS: 6th OLS + all interactions between `Age` and continuous variables and `luxury_dummy` and continuous variables
+
+The 7th case of course is ridiculously complex and probably overfits the data by a large margin, but let's see how they fair against each other in the next chapter
+
+## Model selection 
+
+I ran 7 OLS models where the target varible was log transformed price, while the predictors were defined as described in the previous chapter. I first set aside a holdout set, that was a 15% randomly picked portion of all the data, and used the rest to train my models. I used 5-fold cross validation and averaged the RMSE - my loss function - of each 5 folds to get the final RMSE. I will evaluate the models based on RMSE only - the lower this is, the better the model.
+
+```{r ols modeling, include = FALSE}
+#  create holdout set 
+
+
+set.seed(7)
+
+train_indices <- as.integer(createDataPartition(df$Prices, p = 0.85, list = FALSE))
+df_train <- df[train_indices, ]
+df_holdout <- df[-train_indices, ]
+
+
+# train control is 5 fold cross validation
+train_control <- trainControl(method = "cv",
+                              number = 5,
+                              verboseIter = FALSE)
+
+# modeling
+set.seed(7)
+system.time({
+    ols_model1 <- train(
+        formula(paste0("ln_Prices ~", first_case)),
+        data = df_train,
+        method = "lm",
+        trControl = train_control
+    )
+})
+
+set.seed(7)
+system.time({
+    ols_model2 <- train(
+        formula(paste0("ln_Prices ~", paste0(second_case, collapse = " + "))),
+        data = df_train,
+        method = "lm",
+        trControl = train_control
+    )
+})
+
+set.seed(7)
+system.time({
+    ols_model3 <- train(
+        formula(paste0("ln_Prices ~", paste0(third_case, collapse = " + "))),
+        data = df_train,
+        method = "lm",
+        trControl = train_control
+    )
+})
+
+set.seed(7)
+system.time({
+    ols_model4 <- train(
+        formula(paste0("ln_Prices ~", paste0(fourth_case, collapse = " + "))),
+        data = df_train,
+        method = "lm",
+        trControl = train_control
+    )
+})
+
+set.seed(7)
+system.time({
+    ols_model5 <- train(
+        formula(paste0("ln_Prices ~", paste0(fifth_case, collapse = " + "))),
+        data = df_train,
+        method = "lm",
+        trControl = train_control
+    )
+})
+
+set.seed(7)
+system.time({
+    ols_model6 <- train(
+        formula(paste0("ln_Prices ~", paste0(sixth_case, collapse = " + "))),
+        data = df_train,
+        method = "lm",
+        trControl = train_control
+    )
+})
+
+set.seed(7)
+system.time({
+    ols_model7 <- train(
+        formula(paste0("ln_Prices ~", paste0(seventh_case, collapse = " + "))),
+        data = df_train,
+        method = "lm",
+        trControl = train_control
+    )
+})
+
+
+
+# Model performance and model choice --------------------------------------
+
+
+
+temp_models <-
+    list("OLS1" = ols_model1,
+         "OLS2" = ols_model2,
+         "OLS3" = ols_model3,
+         "OLS4" = ols_model4,
+         "OLS5" = ols_model5,
+         'OLS6' = ols_model6,
+         'OLS7' = ols_model7)
+
+result_temp <- resamples(temp_models) %>% summary()
+
+result_rmse <- imap(temp_models, ~{mean(result_temp$values[[paste0(.y,"~RMSE")]])}) %>% unlist() %>% as.data.frame() %>% rename("CV RMSE" = ".")
+
+result_holdout <- map(temp_models, ~{
+    RMSE(predict(.x, newdata = df_holdout), df_holdout[["ln_Prices"]])
+}) %>% unlist() %>% as.data.frame() %>%
+    rename("Holdout RMSE" = ".")
+
+
+#result_holdout
+```
+
+```{r table 1, echo = FALSE , results = "asis", warning = FALSE, message = FALSE }
+
+knitr::kable(result_rmse, caption= 'Model comparison for OLS models for CV RMSE ', digits = c(4)) 
+```
+
+Based on the RMSEs I'd say that it makes sense to increase model complexity, but only until a point. Even though we see lower RMSEs until the third case, I couldn't really achieve any improvement. Based on this I will select the third model, and used that for prediction as that is not very complex but achieves quite a low RMSE compared to the others. Anyway I will also show how the models performed on the holdout set in the below table:
+
+```{r table 2, echo = FALSE , results = "asis", warning = FALSE, message = FALSE }
+
+knitr::kable(result_holdout, caption= 'Model comparison for OLS models on the holdout set ', digits = c(4)) 
+```
+
+## Prediction
+
+I chose model 3 for prediction, and used all the data to predict a price given the predictors for each observation. When predicting I also converted the log price back to level by not only using the exponential of the predicted log price, but also used a correction term. The first plot shows a quasi prediction interval for cars of given age - I used lowess on the actual price, the predicted price, and the lower and upper bound of an 80% prediction interval. It's visible that the interval is narrower, the older the car which can be explained by the low variation of price for older cars. This is an interesting finding, but probably not a surprising one as older cars are generally less expensive. The second figure is a scatter plot between the predicted and actual prices from which it can be seen that the predictions are actually quite close. 
+
+
+```{r, fig 1, fig.width=10,fig.height=4, fig.align='center', fig.cap='Price predictions', echo = FALSE , results = "asis", warning = FALSE, message = FALSE}
+
+reg <- lm(formula(paste0("ln_Prices ~", paste0(third_case, collapse = " + "))), data=df)
+
+df <- df %>%  mutate ( 
+    pred_ln_Prices = predict(ols_model3,newdata = df) ,
+    pred_level_Prices = exp(pred_ln_Prices) * exp(RMSE(pred_ln_Prices, ln_Prices)**2)
+    )
+
+pred_ln_new_80 <- predict(reg, newdata = df, se.fit = TRUE,interval = 'prediction', level =  0.8)
+
+df<- df %>% mutate(
+    pred_level_lwr_80 = exp(pred_ln_new_80$fit[,'lwr']) *  exp(RMSE(pred_ln_Prices, ln_Prices)**2),
+    pred_level_upr_80 = exp(pred_ln_new_80$fit[,'upr']) *  exp(RMSE(pred_ln_Prices, ln_Prices)**2)
+)
+
+colors <- c("Actual" = "navyblue", "Predicted" = "purple3", "lower 80" = "green4", 'upper 80' = 'gold2')
+
+p1<- ggplot(df, aes(x = Age))+
+    geom_smooth(aes(x = Age, y = Prices, color = 'Actual'), method="loess", se=F, size=1.2, na.rm=T) + 
+    geom_smooth(aes(x = Age, y = pred_level_Prices, color = 'Predicted'), method="loess", se=F, size=1.2, na.rm=T)  +
+    geom_smooth(aes(x = Age, y = pred_level_lwr_80, color = 'lower 80'), method="loess", se=F, size=1.2, na.rm=T)  +
+    geom_smooth(aes(x = Age, y = pred_level_upr_80, color = 'upper 80'), method="loess", se=F, size=1.2, na.rm=T)  +
+    geom_point(aes (x = Age, y = Prices), color = 'navyblue', shape =1, size = 1.5) + theme_minimal() + labs(x = 'Age', y= 'Prices', color = 'Legend') +
+    scale_color_manual(values = colors) + scale_y_continuous(labels = comma) 
+
+p2<- ggplot(df, aes(x = Prices, y = pred_level_Prices))+
+    geom_point(color = 'navyblue', shape =1, size = 1.5 )+
+    geom_abline(color = 'purple4', size = 1.4)+
+    theme_minimal()+
+    labs(x = 'Price', y = 'Predicted price')+
+    scale_x_continuous(labels = comma) + scale_y_continuous(labels = comma) 
+
+ggarrange(p1,p2, nrow  = 1, common.legend = TRUE, legend="left")
+
+```
+
+## Conclusion
+
+I set out to analyse data on Renault Megane used cars that I collected from Hasznaltauto.hu. In an earlier exercise it turned out that using a simple log-level OLS with age of car as the only right hand side variable was fairly good when uncovering the association between price and age of used cars. In this exercise I increased model complexity by adding more variables and played around with their functional forms. It turns out that when it comes to prediction more complex models did outperform the simple log-level case, hence if the task at hand is price prediction it is better to go with more variables. However too complex models might overfit the data so one should keep that in mind when choosing the final model used for prediction.  
