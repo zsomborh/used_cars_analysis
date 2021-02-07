@@ -1,5 +1,5 @@
 ---
-title: "Analysis on used cars - vol 2"
+title: "Analysis on used cars - vol 3"
 author: "Zsombor Hegedus"
 date: '2021 february 4 '
 output:
@@ -99,7 +99,7 @@ seventh_case <- c(sixth_case,interactions2, interactions3)
 
 ## Feature engineering 
 
-My task is to build more and more complex models and to see if by doing so, I can improve their predictive power. Since I will use OLS only, the increasing complexity will be achieved with my selection of predictors and their functional form. In my earlier exercise, I discovered that a log-level model using the age of a car as the only rght hand side variable - performed the best. Learning from that, I will use ln transformation for my target variable, which is the price of a used car. Another lesson from that exercise was that I noticed a set of observations which formed a sort of cluster, and had prices that did not fit into the general pattern at all - I labelled them as potentially luxurious models, and created a dummy variables for them for this exercise. 
+My task is to build more and more complex models and to see if by doing so, I can improve their predictive power. Since I will use OLS only, the increasing complexity will be achieved with my selection of predictors and their functional form. In my earlier exercise, I discovered that a log-level model using the age of a car as the only right hand side variable - performed the best. Learning from that, I will use ln transformation for my target variable, which is the price of a used car. Another lesson from that exercise was that I noticed a set of observations which formed a sort of cluster, and had prices that did not fit into the general pattern at all - I labelled them as potentially luxurious models, and created a dummy variable for them for this exercise. 
 
 Since I scraped quite a few information on used cars, I will use multiple regression models where I include not only age, but other variables such as: `Displacement`, `Horsepower`, `Km`, `PictureCount`. The first two speak for themsleves, the third one, `Km` is the number of kilometers the car ran, and `PictureCount` is the number of photos someone uploaded in the advertisement. Other than these variables I also included interaction terms and second and third order polynomials for the more complex cases. So overall, my models correspond to the below variable sets:
 
@@ -237,7 +237,7 @@ result_holdout <- map(temp_models, ~{
 knitr::kable(result_rmse, caption= 'Model comparison for OLS models for CV RMSE ', digits = c(4)) 
 ```
 
-Based on the RMSEs I'd say that it makes sense to increase model complexity, but only until a point. Even though we see lower RMSEs until the third case, I couldn't really achieve any improvement. Based on this I will select the third model, and used that for prediction as that is not very complex but achieves quite a low RMSE compared to the others. Anyway I will also show how the models performed on the holdout set in the below table:
+Based on the RMSEs I'd say that it makes sense to increase model complexity, but only until a point. Even though we see lower RMSEs until the third case, I couldn't really achieve any improvement afterwards. Based on this I selected the third model, and used that for prediction as that is not very complex but achieves quite a low RMSE compared to the others. Table 2 shows how the models performed on the holdout set where we can also see, that there is not much of a difference between their RMSEs:
 
 ```{r table 2, echo = FALSE , results = "asis", warning = FALSE, message = FALSE }
 
@@ -246,7 +246,7 @@ knitr::kable(result_holdout, caption= 'Model comparison for OLS models on the ho
 
 ## Prediction
 
-I chose model 3 for prediction, and used all the data to predict a price given the predictors for each observation. When predicting I also converted the log price back to level by not only using the exponential of the predicted log price, but also used a correction term. The first plot shows a quasi prediction interval for cars of given age - I used lowess on the actual price, the predicted price, and the lower and upper bound of an 80% prediction interval. It's visible that the interval is narrower, the older the car which can be explained by the low variation of price for older cars. This is an interesting finding, but probably not a surprising one as older cars are generally less expensive. The second figure is a scatter plot between the predicted and actual prices from which it can be seen that the predictions are actually quite close. 
+I chose model 3 for prediction, and used all the data to predict a price for each observation. When predicting I also converted the log price back to level by not only using the exponential of the predicted log price, but also used a correction term. In figure 1, the plot on the left shows a quasi prediction interval for cars of given age - I used lowess on the actual price, the predicted price, and the lower and upper bound of an 80% prediction interval. It's visible that the interval is narrower, the older the car which can be explained by the low variation of price for older cars. This is an interesting finding, but probably not a surprising one as older cars are generally less expensive. The second figure is a scatter plot between the predicted and actual prices from which it can be seen that the predictions are actually quite close. 
 
 
 ```{r, fig 1, fig.width=10,fig.height=4, fig.align='center', fig.cap='Price predictions', echo = FALSE , results = "asis", warning = FALSE, message = FALSE}
@@ -285,7 +285,8 @@ p2<- ggplot(df, aes(x = Prices, y = pred_level_Prices))+
 ggarrange(p1,p2, nrow  = 1, common.legend = TRUE, legend="left")
 
 ```
+\newpage
 
 ## Conclusion
 
-I set out to analyse data on Renault Megane used cars that I collected from Hasznaltauto.hu. In an earlier exercise it turned out that using a simple log-level OLS with age of car as the only right hand side variable was fairly good when uncovering the association between price and age of used cars. In this exercise I increased model complexity by adding more variables and played around with their functional forms. It turns out that when it comes to prediction more complex models did outperform the simple log-level case, hence if the task at hand is price prediction it is better to go with more variables. However too complex models might overfit the data so one should keep that in mind when choosing the final model used for prediction.  
+I set out to analyse data on Renault Megane used cars that I scraped from Hasznaltauto.hu. In an earlier exercise it turned out that using a simple log-level OLS with age of car as the only right hand side variable was fairly good when uncovering the association between price and age of used cars. In this exercise I increased model complexity by adding more variables and played around with their functional forms. It turns out that when it comes to prediction more complex models did outperform the simple log-level case, hence if the task at hand is price prediction it is better to go with more variables. However too complex models might overfit the data so one should keep that in mind when choosing the final model used for prediction.  
